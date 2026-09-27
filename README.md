@@ -121,6 +121,13 @@ Two examples of actionable errors are:
 - Missing telemetry for an execution does not necessarily mean a focus failure; it can mean that the log did not contain the expected format or that an execution could not be correlated.
 - Diagnostics are classified with known patterns. Consult the JSON report for an unexpected issue or to review all warnings.
 
+## Author
+
+David González López-Tercero
+
 ## License
 
-See [LICENSE](LICENSE).
+Copyright © 2026 David González López-Tercero.
+
+This project is licensed under the GNU General Public License v3.0 or later
+(GPL-3.0-or-later). See [LICENSE](LICENSE) for the full text.

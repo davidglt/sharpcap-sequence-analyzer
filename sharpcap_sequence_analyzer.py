@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Created: 2026-09-27
+# Author: David González López-Tercero <davidglt@dragonit.es>
+# SPDX-FileCopyrightText: 2026 David González López-Tercero <davidglt@dragonit.es>
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Analyze SharpCap session logs and create JSON, CSV and text reports."""
 
 from __future__ import annotations
@@ -261,6 +265,7 @@ NON_ASTRONOMICAL_TARGETS = {"", "capture", "preview", "none", "light", "dark", "
 
 
 def read_properties(path: Path) -> dict[str, str]:
+    """Read non-comment key/value settings from a properties file."""
     if not path.exists():
         example = path.with_name(f"{path.name}.example")
         raise FileNotFoundError(f"Configuration file not found: {path}. Copy {example.name} to {path.name} first.")
@@ -275,6 +280,7 @@ def read_properties(path: Path) -> dict[str, str]:
 
 
 def find_latest_log(log_directory: Path) -> Path:
+    """Select the newest SharpCap log by filename date, then modification time."""
     if not log_directory.exists():
         raise FileNotFoundError(f"SharpCap log directory does not exist: {log_directory}")
     if not log_directory.is_dir():
@@ -295,10 +301,12 @@ def find_latest_log(log_directory: Path) -> Path:
 
 
 def read_log_lines(log_file: Path) -> list[str]:
+    """Read log lines as UTF-8 while replacing undecodable bytes."""
     return log_file.read_text(encoding="utf-8", errors="replace").splitlines()
 
 
 def parse_filename_datetime(log_file: Path) -> datetime:
+    """Parse the session start timestamp encoded in a SharpCap log filename."""
     match = LOG_FILENAME_PATTERN.match(log_file.name)
     if match is None:
         raise ValueError(f"Unsupported SharpCap log filename: {log_file.name}")
@@ -309,6 +317,7 @@ def parse_filename_datetime(log_file: Path) -> datetime:
 
 
 def parse_record(line: str) -> tuple[str, str | None, str | None, str]:
+    """Extract level, clock time, thread ID, and message from one log line."""
     text = line.lstrip("\ufeff").rstrip()
     match = RECORD_PATTERN.match(text)
     if match is None:
@@ -317,6 +326,7 @@ def parse_record(line: str) -> tuple[str, str | None, str | None, str]:
 
 
 def parse_timestamp(session_start: datetime, clock_time: str, previous: datetime | None) -> datetime:
+    """Combine a record clock time with the session date, handling midnight rollover."""
     event_time = datetime.strptime(clock_time, "%H:%M:%S.%f").time()
     if previous is None:
         return datetime.combine(session_start.date(), event_time)
@@ -327,18 +337,22 @@ def parse_timestamp(session_start: datetime, clock_time: str, previous: datetime
 
 
 def to_number(value: str) -> float:
+    """Parse a decimal number that may use a comma as its decimal separator."""
     return float(value.replace(",", "."))
 
 
 def to_iso(value: datetime | None) -> str | None:
+    """Return an ISO-8601 representation, preserving None as an absent value."""
     return value.isoformat() if value is not None else None
 
 
 def elapsed_seconds(start: datetime | None, end: datetime | None) -> float | None:
+    """Return elapsed seconds when both event timestamps are available."""
     return None if start is None or end is None else (end - start).total_seconds()
 
 
 def elapsed_text(seconds: float | None) -> str:
+    """Format a duration as HH:MM:SS, or an empty string when unavailable."""
     if seconds is None:
         return ""
     total = max(0, int(seconds))
@@ -348,20 +362,24 @@ def elapsed_text(seconds: float | None) -> str:
 
 
 def add_unique(values: list[Any], value: Any) -> None:
+    """Append a non-empty value only when it is not already present."""
     if value is not None and value != "" and value not in values:
         values.append(value)
 
 
 def clean_target(value: str) -> str | None:
+    """Normalize a target name and discard non-astronomical capture labels."""
     target = value.strip().strip("'").strip('"').strip()
     return None if target.lower() in NON_ASTRONOMICAL_TARGETS else target or None
 
 
 def thermal_bucket_key(value: str) -> str:
+    """Map a tube label to the corresponding report thermal-correction key."""
     return "guide_telescope" if "guide" in value.lower().replace("-", "_") else "main_telescope"
 
 
 def format_compact_coordinate(value: str, coordinate_type: str) -> str:
+    """Convert compact sexagesimal RA or Dec into a colon/degree-marked form."""
     normalized = value.replace(",", ".").strip()
     sign = ""
     if coordinate_type == "dec" and normalized[:1] in {"+", "-"}:
@@ -377,6 +395,7 @@ def format_compact_coordinate(value: str, coordinate_type: str) -> str:
 
 
 def classify_diagnostic(level: str, message: str, meridian_flip_active: bool) -> tuple[str, str]:
+    """Classify a SharpCap diagnostic by category and operational impact."""
     normalized = message.lower()
     if "basler.pylon" in normalized:
         return "optional_camera_driver", "information"
@@ -434,6 +453,7 @@ def classify_diagnostic(level: str, message: str, meridian_flip_active: bool) ->
 
 
 def autofocus_details(description: str) -> dict[str, Any]:
+    """Extract autofocus mode, range or offsets, step count, and backlash."""
     details: dict[str, Any] = {"description": description, "mode": None, "offset_min": None, "offset_max": None, "range_start": None, "range_end": None, "configured_steps": None, "backlash_steps": None}
     match = AUTOFOCUS_DESCRIPTION_PATTERN.search(description)
     if match is None:
@@ -448,10 +468,12 @@ def autofocus_details(description: str) -> dict[str, Any]:
 
 
 def new_autofocus(timestamp: datetime, description: str, filter_name: str | None, exposure_seconds: float | None) -> dict[str, Any]:
+    """Create the initial report record for an autofocus run."""
     return {"started_at": to_iso(timestamp), "completed_at": None, "duration_seconds": None, "duration": "", "status": "running", "filter": filter_name, "exposure_seconds": exposure_seconds, **autofocus_details(description), "measurements": [], "best_fit": None, "scan_result": None, "result": None, "failure_reason": None}
 
 
 def close_autofocus(run: dict[str, Any], timestamp: datetime, status: str | None = None) -> None:
+    """Set the autofocus outcome and calculate its elapsed duration."""
     run["completed_at"] = to_iso(timestamp)
     if status is not None:
         run["status"] = status
@@ -463,10 +485,12 @@ def close_autofocus(run: dict[str, Any], timestamp: datetime, status: str | None
 
 
 def new_dither(timestamp: datetime) -> dict[str, Any]:
+    """Create the initial report record for a guiding dither."""
     return {"started_at": to_iso(timestamp), "settled_at": None, "completed_at": None, "duration_seconds": None, "duration": "", "status": "running", "pixels": None, "ra_only": None, "settle_pixels": None, "settle_min_seconds": None, "settle_max_seconds": None}
 
 
 def close_dither(run: dict[str, Any], timestamp: datetime, status: str = "completed") -> None:
+    """Set a dither outcome and calculate its elapsed duration."""
     run["completed_at"] = to_iso(timestamp)
     run["status"] = status
     seconds = elapsed_seconds(datetime.fromisoformat(run["started_at"]), timestamp)
@@ -489,6 +513,7 @@ def new_thermal(timestamp: datetime, script: str) -> dict[str, Any]:
     }
 
 def close_thermal(run: dict[str, Any], timestamp: datetime) -> None:
+    """Mark a thermal-correction launch complete and calculate its duration."""
     run["finished_at"] = to_iso(timestamp)
     run["status"] = "completed"
     seconds = elapsed_seconds(datetime.fromisoformat(run["started_at"]), timestamp)
@@ -853,6 +878,7 @@ def enrich_thermal_corrections(
                 )
 
 def create_report(log_file: Path, filename_start: datetime) -> dict[str, Any]:
+    """Create the complete empty report structure for a SharpCap session."""
     return {
         "generated_at": datetime.now().astimezone().isoformat(),
         "source_log": {"path": log_file.name, "name": log_file.name, "size_bytes": log_file.stat().st_size, "filename_session_start": to_iso(filename_start), "encoding": "utf-8"},
@@ -870,6 +896,7 @@ def build_report(
     log_file: Path,
     focus_sequencer_log_directory: Path | None = None,
 ) -> dict[str, Any]:
+    """Parse a SharpCap session log and assemble its structured report."""
     filename_start = parse_filename_datetime(log_file)
     lines = read_log_lines(log_file)
     if not any(parse_record(line)[1] is not None for line in lines[:500]):
@@ -1174,6 +1201,7 @@ def build_report(
 
 
 def build_focus_rows(report: dict[str, Any]) -> list[dict[str, str]]:
+    """Convert autofocus and thermal-correction events into export rows."""
     rows: list[dict[str, str]] = []
     for run in report["focus"]["autofocus_runs"]:
         result, scan, measurements = run.get("result") or {}, run.get("scan_result") or {}, run.get("measurements") or []
@@ -1255,6 +1283,7 @@ def write_reports(
     report: dict[str, Any],
     reports_directory: Path = REPORTS_DIRECTORY,
 ) -> tuple[Path, Path, Path]:
+    """Write the JSON session report and matching CSV and text focus tables."""
     reports_directory.mkdir(parents=True, exist_ok=True)
     suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
     json_path = reports_directory / f"sharpcap_session_report_{suffix}.json"
@@ -1302,6 +1331,7 @@ def write_reports(
 
 
 def format_values(values: list[Any], suffix: str = "") -> str:
+    """Render values as a comma-separated list or a standard empty label."""
     return ", ".join(f"{value}{suffix}" for value in values) if values else "Not detected"
 
 def print_thermal_correction_details(
@@ -1353,6 +1383,7 @@ def print_thermal_correction_details(
             )
 
 def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path, text_path: Path) -> None:
+    """Print key session metrics and the paths of generated reports."""
     capture, sequence, guiding, focus = report["capture"], report["sequence"], report["guiding"], report["focus"]
     thermal, meridian, diagnostics = report["thermal_corrections"], report["meridian_flip"], report["diagnostics"]
     print("SharpCap Session Analyzer")
@@ -1433,6 +1464,7 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path, text_
 
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse optional configuration, source-log, and output-directory arguments."""
     parser = argparse.ArgumentParser(
         description="Analyze the latest or a selected SharpCap session log."
     )
@@ -1457,6 +1489,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the analyzer and return a process status code."""
     try:
         arguments = parse_arguments(argv)
         properties = read_properties(arguments.config)
