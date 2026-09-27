@@ -1,25 +1,25 @@
 # SharpCap Session Analyzer
 
-Herramienta Python para analizar logs de sesiones de SharpCap y generar un resumen operativo de la captura: exposiciones, dithering, autofocus, correcciones térmicas de foco, meridian flip, recuperación de guiado e incidencias de sesión.
+A Python tool for analyzing SharpCap session logs and producing an operational capture summary: exposures, dithering, autofocus, thermal focus corrections, meridian flips, guiding recovery, and session issues.
 
-## Funciones
+## Features
 
-- Detecta el objetivo, cámara, filtros, tipos de frame y exposiciones de la sesión.
-- Resume exposiciones científicas y auxiliares, progreso de captura, dithering y autofocus.
-- Analiza la configuración y ejecución del meridian flip, incluida la detención y recuperación del guiado y los plate solves posteriores.
-- Correlaciona las invocaciones de scripts de foco térmico de SharpCap con logs de Focus Sequencer.
-- Genera informes JSON, CSV y TXT en `reports/`.
-- Clasifica diagnósticos para mostrar en consola únicamente errores accionables, manteniendo el recuento total de warnings y el detalle completo en el informe JSON.
+- Detects the session target, camera, filters, frame types, and exposures.
+- Summarizes science and auxiliary exposures, capture progress, dithering, and autofocus.
+- Analyzes meridian-flip configuration and execution, including guiding stop/recovery and post-flip plate solves.
+- Correlates SharpCap thermal-focus script invocations with Focus Sequencer logs.
+- Generates JSON, CSV, and TXT reports under `reports/`.
+- Classifies diagnostics so the console shows only actionable errors while preserving the total warning count and the complete detail in the JSON report.
 
-## Requisitos
+## Requirements
 
-- Python 3.10 o posterior.
-- Un log de SharpCap (`Log_*.log`).
-- Opcionalmente, logs de Focus Sequencer para enriquecer las correcciones térmicas.
+- Python 3.10 or later.
+- A SharpCap log file (`Log_*.log`).
+- Optionally, Focus Sequencer logs to enrich thermal-correction data.
 
-No requiere dependencias externas para el uso básico.
+No external dependencies are required for basic use.
 
-## Instalación
+## Installation
 
 ```powershell
 git clone https://github.com/davidglt/sharpcap-sequence-analyzer.git
@@ -28,29 +28,29 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-## Configuración
+## Configuration
 
-Copia el archivo de ejemplo y adapta las rutas a tu instalación:
+Copy the example file and adapt the paths to your installation:
 
 ```powershell
 Copy-Item sharpcap_sequence_analyzer.properties.example sharpcap_sequence_analyzer.properties
 ```
 
-El archivo local `sharpcap_sequence_analyzer.properties` no debe subirse al repositorio. Configura en él, según corresponda:
+The local `sharpcap_sequence_analyzer.properties` file should not be committed. Configure the following as needed:
 
-- La ruta del log de SharpCap o el directorio donde se encuentran los logs.
-- La ruta de los logs de Focus Sequencer.
-- Los nombres de los scripts de corrección térmica del tubo principal y del tubo guía.
+- The SharpCap log file path or the directory that contains SharpCap logs.
+- The directory containing Focus Sequencer logs.
+- The names of the primary-tube and guide-tube thermal-correction scripts.
 
-## Uso
+## Usage
 
-Ejecuta el analizador desde el directorio del proyecto:
+Run the analyzer from the project directory:
 
 ```powershell
 python sharpcap_sequence_analyzer.py
 ```
 
-El programa muestra un resumen en consola y escribe tres artefactos con marca temporal en `reports/`:
+The program prints a console summary and writes three timestamped artifacts to `reports/`:
 
 ```text
 sharpcap_session_report_YYYYMMDD_HHMMSS.json
@@ -58,61 +58,61 @@ sharpcap_focus_corrections_YYYYMMDD_HHMMSS.csv
 sharpcap_focus_corrections_YYYYMMDD_HHMMSS.txt
 ```
 
-## Correcciones térmicas de foco
+## Thermal focus corrections
 
-El analizador detecta las ejecuciones de los scripts de foco térmico iniciadas por SharpCap. Cuando encuentra un bloque correspondiente en los logs de Focus Sequencer, incorpora la telemetría disponible:
+The analyzer detects thermal-focus script executions started by SharpCap. When it finds a matching block in a Focus Sequencer log, it adds the available telemetry:
 
-- `T`: temperatura del enfocador o sensor asociado, en °C.
-- `dT`: variación de temperatura respecto de la referencia, en °C.
-- `TCF`: coeficiente térmico usado para calcular la compensación, habitualmente en pasos/°C.
-- `corr`: corrección solicitada, en pasos del enfocador.
-- `pos`: posición `antes->después` del enfocador.
-- `backlash`: indica si el movimiento requirió compensación de backlash.
-- `update`: estado de actualización de la posición o del modelo.
-- `r`: resultado de la ejecución, por ejemplo `ok`, `min_correction` o `interrupted`.
+- `T`: focuser or associated-sensor temperature in °C.
+- `dT`: temperature change relative to the reference, in °C.
+- `TCF`: thermal coefficient used to calculate compensation, typically in focuser steps/°C.
+- `corr`: requested correction in focuser steps.
+- `pos`: focuser position as `before->after`.
+- `backlash`: whether the move required backlash compensation.
+- `update`: position or model update status.
+- `r`: execution result, such as `ok`, `min_correction`, or `interrupted`.
 
-Ejemplo de salida compacta:
+Compact console example:
 
 ```text
 [22:43:00.729633] T=22.3 C; dT=-2.25 C; TCF=-60.29; corr=136; pos=14430->14566; backlash=False; update=ok; r=ok
 ```
 
-`r=min_correction` significa que Focus Sequencer evaluó una corrección pero decidió no mover el enfocador porque no alcanzaba el umbral configurado o porque el movimiento requerido entraba en la dirección de backlash. Estos eventos se conservan en los informes. Dependiendo del formato de la línea emitida por Focus Sequencer, algunos campos opcionales pueden no estar disponibles y se muestran como `None`.
+`r=min_correction` means that Focus Sequencer evaluated a correction but decided not to move the focuser because it did not reach the configured threshold or because the required movement was in the backlash direction. These events remain in the reports. Depending on the format of the line emitted by Focus Sequencer, some optional fields may be unavailable and displayed as `None`.
 
-### Tubo principal y tubo guía
+### Primary and guide tubes
 
-Las correcciones se separan entre tubo principal y tubo guía según el script invocado desde SharpCap. Para enriquecer ambos flujos, mantén logs de Focus Sequencer diferenciados y configurados con la convención de nombres que use tu instalación. Si no existe un bloque coincidente para una ejecución —por ejemplo, al analizar una sesión anterior a la separación de logs— se informa como `no_matching_focus_sequencer_execution`.
+Corrections are separated between the primary and guide tubes according to the script invoked by SharpCap. To enrich both workflows, keep distinct Focus Sequencer logs using the naming convention configured for your installation. If no matching log block exists for an execution—for example, when analyzing a session recorded before separate guide logs were introduced—the analyzer reports `no_matching_focus_sequencer_execution`.
 
-## Diagnósticos
+## Diagnostics
 
-La consola está pensada para revisión rápida durante la operación:
+The console is designed for fast operational review:
 
-- Muestra los errores clasificados como accionables.
-- Muestra el total de warnings, sin imprimir cada warning individualmente.
-- Muestra el total de errores visibles y los registros fatales.
-- Conserva todos los diagnósticos, incluidos warnings, eventos esperados y detalles duplicados, en el informe JSON.
+- It shows diagnostics classified as actionable errors.
+- It shows the total warning count without printing every individual warning.
+- It shows the total number of visible errors and fatal records.
+- It retains all diagnostics, including warnings, expected events, and duplicate detail records, in the JSON report.
 
-Entre los eventos normalmente suprimidos de la consola están los drivers opcionales no instalados, propiedades ASCOM no implementadas, cancelaciones esperadas de captura durante un meridian flip y mensajes de errores ignorados explícitamente por una secuencia.
+Events normally suppressed from console output include unavailable optional camera drivers, unsupported ASCOM properties, expected single-frame capture cancellations during a meridian flip, and errors explicitly ignored by a sequence.
 
-Dos ejemplos de errores accionables son:
+Two examples of actionable errors are:
 
-- `autofocus_no_solution`: SharpCap no encontró una posición de mejor foco dentro del rango explorado.
-- `focuser_connection`: el monitor ASCOM del enfocador informó una desconexión.
+- `autofocus_no_solution`: SharpCap could not find a best-focus position within the scanned range.
+- `focuser_connection`: the ASCOM focuser monitor reported a disconnection.
 
-## Archivos generados
+## Generated files
 
-| Archivo | Contenido |
+| File | Contents |
 |---|---|
-| `sharpcap_session_report_*.json` | Informe completo y estructurado de la sesión, incluidas métricas, correcciones y diagnósticos. |
-| `sharpcap_focus_corrections_*.csv` | Tabla de correcciones térmicas para filtrado y análisis en una hoja de cálculo. |
-| `sharpcap_focus_corrections_*.txt` | Tabla legible de correcciones térmicas. |
+| `sharpcap_session_report_*.json` | Complete structured session report, including metrics, corrections, and diagnostics. |
+| `sharpcap_focus_corrections_*.csv` | Thermal-correction table for filtering and analysis in a spreadsheet. |
+| `sharpcap_focus_corrections_*.txt` | Human-readable thermal-correction table. |
 
-## Limitaciones
+## Limitations
 
-- El analizador interpreta formatos concretos de logs de SharpCap y Focus Sequencer; cambios de versión o de scripts pueden requerir ajustes de patrones.
-- La ausencia de telemetría en una ejecución no implica necesariamente un fallo de foco: puede indicar que el log no contiene el formato esperado o que no se pudo correlacionar una ejecución.
-- Los diagnósticos se clasifican por patrones conocidos. Consulta el JSON ante una incidencia inesperada o para revisar los warnings completos.
+- The analyzer interprets specific SharpCap and Focus Sequencer log formats; version or script changes may require pattern updates.
+- Missing telemetry for an execution does not necessarily mean a focus failure; it can mean that the log did not contain the expected format or that an execution could not be correlated.
+- Diagnostics are classified with known patterns. Consult the JSON report for an unexpected issue or to review all warnings.
 
-## Licencia
+## License
 
-Consulta [LICENSE](LICENSE).
+See [LICENSE](LICENSE).
