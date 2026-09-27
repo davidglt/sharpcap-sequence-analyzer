@@ -368,6 +368,42 @@ def format_compact_coordinate(value: str, coordinate_type: str) -> str:
 
 def classify_diagnostic(level: str, message: str, meridian_flip_active: bool) -> tuple[str, str]:
     normalized = message.lower()
+    if "basler.pylon" in normalized:
+        return "optional_camera_driver", "information"
+
+    if (
+        "focal length is not implemented" in normalized
+        or "focallength is not implemented" in normalized
+    ):
+        return "ascom_driver_capability", "information"
+
+    if (
+        "single frame capture cancelled" in normalized
+        and "operationcanceledexception" in normalized
+    ):
+        return "expected_capture_cancellation", "expected"
+
+    if "ignoring error from sequencer" in normalized:
+        return "sequencer_error_ignored", "information"
+
+    if (
+        "did not find a best focus position" in normalized
+        or "no best focus position" in normalized
+    ):
+        return "autofocus_no_solution", "error"
+
+    if (
+        "inner exception" in normalized
+        and "ascom.notconnectedexception" in normalized
+    ):
+        return "focuser_connection_detail", "information"
+
+    if (
+        "focuser monitor thread failed" in normalized
+        or "ascom.notconnectedexception" in normalized
+    ):
+        return "focuser_connection", "error"    
+
     if (("within" in normalized and "degrees of the meridian" in normalized) or
             (meridian_flip_active and ("single frame capture cancelled" in normalized or "capture cancelled" in normalized))):
         return "expected_meridian_flip", "expected"
@@ -385,6 +421,14 @@ def classify_diagnostic(level: str, message: str, meridian_flip_active: bool) ->
     if any(token in normalized for token in ("exception", "stack trace", "unhandled")) or level == "fatal":
         return "software_exception", "critical"
     return ("other_error", "error") if level == "error" else ("other_warning", "warning")
+    if (
+        any(
+            token in normalized
+            for token in ("exception", "stack trace", "unhandled")
+        )
+        or level == "fatal"
+    ):
+        return "software_exception", "critical"
 
 
 def autofocus_details(description: str) -> dict[str, Any]:
@@ -1353,21 +1397,30 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path, text_
         print(f"Guiding restarted after flip: {'yes' if meridian['guiding_restarted'] else 'no'}")
         print(f"Post-flip plate solves: {meridian['plate_solves_after_flip']}")
     print("Diagnostics:")
-    print(f"  Critical: {diagnostics['impact_counts']['critical']}")
-    print(f"  Actionable errors: {diagnostics['impact_counts']['error']}")
-    print(f"  Warnings: {diagnostics['impact_counts']['warning']}")
-    print(f"  Expected events: {diagnostics['impact_counts']['expected']}")
-    if diagnostics["by_category"]:
-        print("Diagnostic categories:")
-        for category, summary in sorted(diagnostics["by_category"].items(), key=lambda item: (item[1]["impact"], -item[1]["count"])):
-            print(f"  - {category.replace('_', ' ')}: {summary['count']} ({summary['impact']})")
-    if diagnostics["relevant_events"]:
-        print("Most relevant diagnostic events:")
-        for event in diagnostics["relevant_events"][:10]:
-            clock = event["timestamp"].split("T")[-1]
-            print(f"  - [{clock}] {event['level'].upper()} {event['category']}: {event['message']}")
+    console_errors = [
+        event
+        for event in diagnostics["entries"]
+        if event["impact"] in {"error", "critical"}
+    ]
+
+    print("Errors:")
+
+    if console_errors:
+        for event in console_errors[:10]:
+            timestamp = event.get("timestamp") or "unknown"
+            clock = timestamp.split("T")[-1] if "T" in timestamp else timestamp
+
+            print(
+                f"  - [{clock}] "
+                f"{event['level'].upper()} "
+                f"{event['category']}: "
+                f"{event['message']}"
+            )
+    else:
+        print("  None")
+    console_error_count = len(console_errors)
     print(f"Warnings: {diagnostics['warning_count']}")
-    print(f"Errors: {diagnostics['error_count']}")
+    print(f"Errors: {console_error_count}")
     print(f"Fatal records: {diagnostics['fatal_count']}")
     print(f"JSON report: {json_path}")
     print(f"Focus corrections CSV: {csv_path}")
