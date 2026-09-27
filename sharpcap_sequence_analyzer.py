@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import csv
+import argparse
 import json
 import re
 import sys
@@ -281,7 +282,16 @@ def find_latest_log(log_directory: Path) -> Path:
     logs = [path for path in log_directory.rglob("Log_*.log") if path.is_file()]
     if not logs:
         raise FileNotFoundError(f"No Log_*.log files found under: {log_directory}")
-    return max(logs, key=lambda path: path.stat().st_mtime)
+    dated_logs: list[tuple[datetime, Path]] = []
+    undated_logs: list[Path] = []
+    for path in logs:
+        try:
+            dated_logs.append((parse_filename_datetime(path), path))
+        except ValueError:
+            undated_logs.append(path)
+    if dated_logs:
+        return max(dated_logs, key=lambda item: (item[0], item[1].stat().st_mtime))[1]
+    return max(undated_logs, key=lambda path: path.stat().st_mtime)
 
 
 def read_log_lines(log_file: Path) -> list[str]:
@@ -421,14 +431,6 @@ def classify_diagnostic(level: str, message: str, meridian_flip_active: bool) ->
     if any(token in normalized for token in ("exception", "stack trace", "unhandled")) or level == "fatal":
         return "software_exception", "critical"
     return ("other_error", "error") if level == "error" else ("other_warning", "warning")
-    if (
-        any(
-            token in normalized
-            for token in ("exception", "stack trace", "unhandled")
-        )
-        or level == "fatal"
-    ):
-        return "software_exception", "critical"
 
 
 def autofocus_details(description: str) -> dict[str, Any]:
@@ -853,7 +855,7 @@ def enrich_thermal_corrections(
 def create_report(log_file: Path, filename_start: datetime) -> dict[str, Any]:
     return {
         "generated_at": datetime.now().astimezone().isoformat(),
-        "source_log": {"path": str(log_file.resolve()), "name": log_file.name, "size_bytes": log_file.stat().st_size, "filename_session_start": to_iso(filename_start), "encoding": "utf-8"},
+        "source_log": {"path": log_file.name, "name": log_file.name, "size_bytes": log_file.stat().st_size, "filename_session_start": to_iso(filename_start), "encoding": "utf-8"},
         "session": {},
         "capture": {"targets": [], "cameras": [], "filters": [], "frame_types": [], "resolutions": [], "bayer_patterns": [], "science_filters": [], "science_exposure_seconds": [], "science_frames": [], "auxiliary_filters": [], "auxiliary_exposure_seconds": [], "auxiliary_frames": [], "captured_files": [], "science_capture_count": 0},
         "sequence": {"capture_blocks": [], "progress_updates": [], "latest_completed_frames": None, "planned_frames": None, "guiding_required": None, "total_completed_frames": 0, "total_planned_frames": 0},
@@ -1249,12 +1251,15 @@ def build_focus_rows(report: dict[str, Any]) -> list[dict[str, str]]:
     return sorted(rows, key=lambda row: row["timestamp"])
 
 
-def write_reports(report: dict[str, Any]) -> tuple[Path, Path, Path]:
-    REPORTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
+def write_reports(
+    report: dict[str, Any],
+    reports_directory: Path = REPORTS_DIRECTORY,
+) -> tuple[Path, Path, Path]:
+    reports_directory.mkdir(parents=True, exist_ok=True)
     suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_path = REPORTS_DIRECTORY / f"sharpcap_session_report_{suffix}.json"
-    csv_path = REPORTS_DIRECTORY / f"sharpcap_focus_corrections_{suffix}.csv"
-    text_path = REPORTS_DIRECTORY / f"sharpcap_focus_corrections_{suffix}.txt"
+    json_path = reports_directory / f"sharpcap_session_report_{suffix}.json"
+    csv_path = reports_directory / f"sharpcap_focus_corrections_{suffix}.csv"
+    text_path = reports_directory / f"sharpcap_focus_corrections_{suffix}.txt"
     json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     rows = build_focus_rows(report)
     fields = ["timestamp", "source", "tube", "status", "match_status", "filter", "exposure_seconds", "parameters", "start_position", "best_position", "final_position", "temperature_celsius", "reference_temperature_celsius", "delta_temperature_celsius", "thermal_coefficient", "filter_offset_steps", "requested_correction_steps", "backlash_applied", "update_status", "end_reason", "focus_score", "variance_percent", "duration", "focus_sequencer_log"]
@@ -1427,9 +1432,34 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path, text_
     print(f"Focus corrections table: {text_path}")
 
 
-def main() -> int:
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Analyze the latest or a selected SharpCap session log."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=CONFIG_PATH,
+        help="Path to the properties configuration file.",
+    )
+    parser.add_argument(
+        "--log",
+        type=Path,
+        help="Specific SharpCap log to analyze instead of selecting the latest one.",
+    )
+    parser.add_argument(
+        "--reports-dir",
+        type=Path,
+        default=REPORTS_DIRECTORY,
+        help="Directory where JSON, CSV, and TXT reports are written.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
     try:
-        properties = read_properties(CONFIG_PATH)
+        arguments = parse_arguments(argv)
+        properties = read_properties(arguments.config)
         configured_path = properties.get("sharpcap.logs.path")
         focus_sequencer_path = properties.get(
             "sharpcap.focus_sequencer.logs.path"
@@ -1441,12 +1471,14 @@ def main() -> int:
         )
         if not configured_path:
             raise KeyError("Missing required property: sharpcap.logs.path")
-        log_file = find_latest_log(Path(configured_path))
+        log_file = arguments.log or find_latest_log(Path(configured_path))
+        if not log_file.is_file():
+            raise FileNotFoundError(f"SharpCap log file does not exist: {log_file}")
         report = build_report(
             log_file,
             focus_sequencer_directory,
         )
-        json_path, csv_path, text_path = write_reports(report)
+        json_path, csv_path, text_path = write_reports(report, arguments.reports_dir)
         print_summary(report, json_path, csv_path, text_path)
         return 0
     except (FileNotFoundError, NotADirectoryError, KeyError, OSError, UnicodeError, ValueError) as error:

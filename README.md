@@ -50,6 +50,14 @@ Run the analyzer from the project directory:
 python sharpcap_sequence_analyzer.py
 ```
 
+For reproducible analysis of a specific log, or to use a different configuration
+and output directory:
+
+```powershell
+python sharpcap_sequence_analyzer.py --log C:\path\to\Log_2026-01-01T00_00_00-123.log
+python sharpcap_sequence_analyzer.py --config C:\path\analyzer.properties --reports-dir .\output
+```
+
 The program prints a console summary and writes three timestamped artifacts to `reports/`:
 
 ```text
@@ -103,7 +111,7 @@ Two examples of actionable errors are:
 
 | File | Contents |
 |---|---|
-| `sharpcap_session_report_*.json` | Complete structured session report, including metrics, corrections, and diagnostics. |
+| `sharpcap_session_report_*.json` | Complete structured session report, including metrics, corrections, diagnostics, and the source log filename. |
 | `sharpcap_focus_corrections_*.csv` | Thermal-correction table for filtering and analysis in a spreadsheet. |
 | `sharpcap_focus_corrections_*.txt` | Human-readable thermal-correction table. |
 
