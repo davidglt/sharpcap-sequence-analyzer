@@ -1342,9 +1342,9 @@ def print_thermal_correction_details(
 
             print(
                 f"  [{clock}] T={temperature} C; dT={delta} C; "
-                f"TCF={tcf}; correction={correction}; "
+                f"TCF={tcf}; corr={correction}; "
                 f"pos={before}->{after}; backlash={backlash}; "
-                f"update={update}; result={status}"
+                f"u={update}; r={status}"
             )
 
 def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path, text_path: Path) -> None:
