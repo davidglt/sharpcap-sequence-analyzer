@@ -1,0 +1,113 @@
+# =============================================================================
+# SharpCap Sequence Analyzer
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Local application configuration
+# -----------------------------------------------------------------------------
+
+# Contains a machine-specific SharpCap log path.
+# Keep sharpcap_sequence_analyzer.properties.example versioned as a template.
+sharpcap_sequence_analyzer.properties
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# -----------------------------------------------------------------------------
+# Generated reports and analysis output
+# -----------------------------------------------------------------------------
+
+# Generated session-analysis reports are local artifacts.
+reports/
+
+# Optional generic output directories
+output/
+dist/
+build/
+
+# -----------------------------------------------------------------------------
+# Python bytecode, caches, and test artifacts
+# -----------------------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# -----------------------------------------------------------------------------
+# Python virtual environments
+# -----------------------------------------------------------------------------
+
+.venv/
+venv/
+env/
+ENV/
+
+# -----------------------------------------------------------------------------
+# Packaging and build metadata
+# -----------------------------------------------------------------------------
+
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+wheels/
+MANIFEST
+
+# -----------------------------------------------------------------------------
+# Jupyter Notebook checkpoints
+# -----------------------------------------------------------------------------
+
+.ipynb_checkpoints/
+
+# -----------------------------------------------------------------------------
+# Editor and IDE settings
+# -----------------------------------------------------------------------------
+
+.vscode/
+.idea/
+*.code-workspace
+*.suo
+*.user
+*.userossc
+*.sln.docstates
+
+# -----------------------------------------------------------------------------
+# Operating system files
+# -----------------------------------------------------------------------------
+
+.DS_Store
+.DS_Store?
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# -----------------------------------------------------------------------------
+# Temporary and backup files
+# -----------------------------------------------------------------------------
+
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# -----------------------------------------------------------------------------
+# Optional local copies of SharpCap source logs
+# -----------------------------------------------------------------------------
+
+# Uncomment this only if SharpCap logs are copied into the repository.
+# logs/

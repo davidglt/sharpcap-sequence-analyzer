@@ -1,0 +1,3 @@
+# Absolute path to the SharpCap log directory.
+# Use forward slashes on Windows to avoid escaping backslashes.
+sharpcap.logs.path=C:/Users/YOUR-USER/AppData/Local/SharpCap/logs
