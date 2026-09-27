@@ -169,6 +169,62 @@ THERMAL_COMMAND_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+FOCUS_SEQUENCER_RECORD_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+\|\s+"
+    r"(?P<level>START|INFO|SKIP|ERROR|WARNING)\s*\|\s*(?P<message>.*)$",
+    re.IGNORECASE,
+)
+
+FOCUS_SEQUENCER_START_PATTERN = re.compile(
+    r"\btube=(?P<tube>main|guide)\s*\|\s*"
+    r"ref=(?P<reference>.*?)\s*\|\s*"
+    r"focus_ref=(?P<focus_ref>-?\d+)\s*\|\s*"
+    r"T_ref=(?P<temperature>[-\d.,]+)\s*(?:°|º)?C\s*\|\s*"
+    r"TCF=(?P<tcf>[-\d.,]+).*?"
+    r"(?:\|\s*filter=(?P<filter>.*?))?"
+    r"(?:\|\s*filter_offset=(?P<filter_offset>[+-]?\d+))?"
+    r".*?\|\s*backlash=(?P<backlash>\d+)\s*\|\s*"
+    r"min_correction=(?P<minimum>\d+)",
+    re.IGNORECASE,
+)
+
+FOCUS_SEQUENCER_CALCULATION_PATTERN = re.compile(
+    r"\btube=(?P<tube>main|guide)\s*\|\s*"
+    r"T=(?P<temperature>[-\d.,]+)\s*(?:°|º)?C\s*\|\s*"
+    r"dT=(?P<delta_temperature>[+-]?[\d.,]+)\s*(?:°|º)?C\s*\|\s*"
+    r"TCF=(?P<tcf>[-\d.,]+).*?"
+    r"(?:\|\s*filter=(?P<filter>.*?))?"
+    r"(?:\|\s*filter_offset=(?P<filter_offset>[+-]?\d+))?"
+    r"(?:\|\s*base_target=(?P<base_target>-?\d+))?"
+    r"\s*\|\s*target=(?P<target>-?\d+)\s*\|\s*"
+    r"pos=(?P<position>-?\d+)\s*\|\s*"
+    r"correction=(?P<correction>[+-]?\d+)\s*\|\s*"
+    r"backlash=(?P<backlash>True|False)",
+    re.IGNORECASE,
+)
+
+FOCUS_SEQUENCER_FINAL_PATTERN = re.compile(
+    r"\bfinal=(?P<position>-?\d+)",
+    re.IGNORECASE,
+)
+
+FOCUS_SEQUENCER_END_PATTERN = re.compile(
+    r"\bEND\s*\|\s*pos=(?P<position>-?\d+|N/A)\s*\|\s*"
+    r"reason=(?P<reason>[A-Za-z0-9_-]+)",
+    re.IGNORECASE,
+)
+
+FOCUS_SEQUENCER_UPDATE_OK_PATTERN = re.compile(
+    r"\bUPDATE\s+OK\b.*?\btube=(?P<tube>main|guide)\b",
+    re.IGNORECASE,
+)
+
+FOCUS_SEQUENCER_UPDATE_FAILED_PATTERN = re.compile(
+    r"\bUPDATE\s+FAILED\b\s*(?:\(rc=(?P<return_code>\d+)\))?\s*:?\s*"
+    r"(?P<message>.*)$",
+    re.IGNORECASE,
+)
+
 MERIDIAN_LIMIT_PATTERN = re.compile(
     r"\bStop\s+running\s+these\s+steps\s+when\s+(?P<degrees>[\d.,]+)\s+"
     r"degrees\s+from\s+the\s+meridian\b",
@@ -371,10 +427,20 @@ def close_dither(run: dict[str, Any], timestamp: datetime, status: str = "comple
     run["duration_seconds"] = seconds
     run["duration"] = elapsed_text(seconds)
 
-
 def new_thermal(timestamp: datetime, script: str) -> dict[str, Any]:
-    return {"script": script, "command": None, "parameters": None, "started_at": to_iso(timestamp), "finished_at": None, "duration_seconds": None, "duration": "", "status": "running"}
-
+    """Create a SharpCap-recorded thermal-correction launch."""
+    return {
+        "script": script,
+        "command": None,
+        "parameters": None,
+        "started_at": to_iso(timestamp),
+        "finished_at": None,
+        "duration_seconds": None,
+        "duration": "",
+        "status": "running",
+        "match_status": "not_checked",
+        "focus_sequencer": None,
+    }
 
 def close_thermal(run: dict[str, Any], timestamp: datetime) -> None:
     run["finished_at"] = to_iso(timestamp)
@@ -383,6 +449,362 @@ def close_thermal(run: dict[str, Any], timestamp: datetime) -> None:
     run["duration_seconds"] = seconds
     run["duration"] = elapsed_text(seconds)
 
+def parse_focus_sequencer_timestamp(value: str) -> datetime:
+    """Parse a Focus Sequencer log timestamp."""
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+def focus_sequencer_log_candidates(
+    log_directory: Path,
+    session_start: datetime,
+    session_end: datetime,
+    tube: str,
+) -> list[Path]:
+    """Return daily Focus Sequencer logs that can overlap a SharpCap session."""
+    if not log_directory.exists() or not log_directory.is_dir():
+        return []
+
+    suffix = (
+        "_focus_sequencer_guide.log"
+        if tube == "guide"
+        else "_focus_sequencer.log"
+    )
+
+    first_day = (session_start - timedelta(days=1)).date()
+    last_day = (session_end + timedelta(days=1)).date()
+    current_day = first_day
+    candidates: list[Path] = []
+
+    while current_day <= last_day:
+        path = log_directory / f"{current_day.strftime('%Y%m%d')}{suffix}"
+        if path.is_file():
+            candidates.append(path)
+        current_day += timedelta(days=1)
+
+    return candidates
+
+
+def new_focus_sequencer_execution(
+    timestamp: datetime,
+    tube: str,
+    log_file: Path,
+) -> dict[str, Any]:
+    """Create one parsed Focus Sequencer execution."""
+    return {
+        "tube": tube,
+        "focus_sequencer_log": str(log_file),
+        "started_at": to_iso(timestamp),
+        "completed_at": None,
+        "duration_seconds": None,
+        "duration": "",
+        "status": "running",
+        "end_reason": None,
+        "reference_timestamp": None,
+        "focus_reference_position": None,
+        "reference_temperature_celsius": None,
+        "temperature_celsius": None,
+        "delta_temperature_celsius": None,
+        "thermal_coefficient": None,
+        "filter": None,
+        "filter_offset_steps": None,
+        "backlash_setting_steps": None,
+        "minimum_correction_steps": None,
+        "position_before": None,
+        "base_target_position": None,
+        "target_position": None,
+        "requested_correction_steps": None,
+        "backlash_applied": None,
+        "position_after": None,
+        "update_status": "not_logged",
+        "update_errors": [],
+        "messages": [],
+    }
+
+
+def close_focus_sequencer_execution(
+    execution: dict[str, Any],
+    timestamp: datetime,
+    reason: str,
+) -> None:
+    """Finalize one Focus Sequencer execution."""
+    execution["completed_at"] = to_iso(timestamp)
+    execution["end_reason"] = reason
+    execution["status"] = reason
+    seconds = elapsed_seconds(
+        datetime.fromisoformat(execution["started_at"]),
+        timestamp,
+    )
+    execution["duration_seconds"] = seconds
+    execution["duration"] = elapsed_text(seconds)
+
+
+def parse_focus_sequencer_logs(
+    log_directory: Path,
+    session_start: datetime,
+    session_end: datetime,
+    tube: str,
+) -> list[dict[str, Any]]:
+    """Parse Focus Sequencer blocks from the daily log files for one tube."""
+    executions: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+
+    for log_file in focus_sequencer_log_candidates(
+        log_directory,
+        session_start,
+        session_end,
+        tube,
+    ):
+        for raw_line in log_file.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines():
+            record = FOCUS_SEQUENCER_RECORD_PATTERN.match(raw_line.strip())
+
+            if record is None:
+                continue
+
+            timestamp = parse_focus_sequencer_timestamp(
+                record.group("timestamp")
+            )
+            level = record.group("level").upper()
+            message = record.group("message").strip()
+
+            start = FOCUS_SEQUENCER_START_PATTERN.search(message)
+            if level == "START" and start is not None:
+                if current is not None and current["completed_at"] is None:
+                    close_focus_sequencer_execution(
+                        current,
+                        timestamp,
+                        "interrupted",
+                    )
+
+                detected_tube = start.group("tube").lower()
+                if detected_tube != tube:
+                    current = None
+                    continue
+
+                current = new_focus_sequencer_execution(
+                    timestamp,
+                    tube,
+                    log_file,
+                )
+                current["reference_timestamp"] = start.group("reference")
+                current["focus_reference_position"] = int(
+                    start.group("focus_ref")
+                )
+                current["reference_temperature_celsius"] = to_number(
+                    start.group("temperature")
+                )
+                current["thermal_coefficient"] = to_number(
+                    start.group("tcf")
+                )
+                current["filter"] = (
+                    start.group("filter").strip()
+                    if start.group("filter")
+                    else None
+                )
+                current["filter_offset_steps"] = (
+                    int(start.group("filter_offset"))
+                    if start.group("filter_offset")
+                    else None
+                )
+                current["backlash_setting_steps"] = int(
+                    start.group("backlash")
+                )
+                current["minimum_correction_steps"] = int(
+                    start.group("minimum")
+                )
+                executions.append(current)
+                continue
+
+            if current is None:
+                continue
+
+            current["messages"].append(
+                {
+                    "timestamp": to_iso(timestamp),
+                    "level": level,
+                    "message": message,
+                }
+            )
+
+            if level == "ERROR":
+                current["update_errors"].append(message)
+
+            update_ok = FOCUS_SEQUENCER_UPDATE_OK_PATTERN.search(message)
+            if update_ok:
+                current["update_status"] = "ok"
+
+            update_failed = FOCUS_SEQUENCER_UPDATE_FAILED_PATTERN.search(
+                message
+            )
+            if update_failed:
+                current["update_status"] = "failed"
+                failure = update_failed.group("message").strip()
+                if failure:
+                    current["update_errors"].append(failure)
+
+            calculation = FOCUS_SEQUENCER_CALCULATION_PATTERN.search(message)
+            if calculation:
+                current["temperature_celsius"] = to_number(
+                    calculation.group("temperature")
+                )
+                current["delta_temperature_celsius"] = to_number(
+                    calculation.group("delta_temperature")
+                )
+                current["thermal_coefficient"] = to_number(
+                    calculation.group("tcf")
+                )
+                current["filter"] = (
+                    calculation.group("filter").strip()
+                    if calculation.group("filter")
+                    else current["filter"]
+                )
+                current["filter_offset_steps"] = (
+                    int(calculation.group("filter_offset"))
+                    if calculation.group("filter_offset")
+                    else current["filter_offset_steps"]
+                )
+                current["position_before"] = int(
+                    calculation.group("position")
+                )
+                current["base_target_position"] = (
+                    int(calculation.group("base_target"))
+                    if calculation.group("base_target")
+                    else None
+                )
+                current["target_position"] = int(
+                    calculation.group("target")
+                )
+                current["requested_correction_steps"] = int(
+                    calculation.group("correction")
+                )
+                current["backlash_applied"] = (
+                    calculation.group("backlash").lower() == "true"
+                )
+                final = FOCUS_SEQUENCER_FINAL_PATTERN.search(message)
+                if final:
+                    current["position_after"] = int(final.group("position"))
+
+            end = FOCUS_SEQUENCER_END_PATTERN.search(message)
+            if end:
+                position = end.group("position")
+                if position != "N/A":
+                    current["position_after"] = int(position)
+
+                close_focus_sequencer_execution(
+                    current,
+                    timestamp,
+                    end.group("reason"),
+                )
+                current = None
+
+    if current is not None and current["completed_at"] is None:
+        close_focus_sequencer_execution(
+            current,
+            session_end,
+            "unfinished",
+        )
+
+    return executions
+
+
+def match_focus_sequencer_execution(
+    thermal_execution: dict[str, Any],
+    sequencer_executions: list[dict[str, Any]],
+    max_start_delay_seconds: float = 180.0,
+) -> dict[str, Any] | None:
+    """Return the closest unmatched sequencer block after a SharpCap launch."""
+    started_at = thermal_execution.get("started_at")
+
+    if not started_at:
+        return None
+
+    sharp_cap_start = datetime.fromisoformat(started_at)
+    candidates: list[tuple[float, dict[str, Any]]] = []
+
+    for execution in sequencer_executions:
+        if execution.get("_matched"):
+            continue
+
+        sequencer_start = datetime.fromisoformat(execution["started_at"])
+        delay = (sequencer_start - sharp_cap_start).total_seconds()
+
+        if -30.0 <= delay <= max_start_delay_seconds:
+            candidates.append((abs(delay), execution))
+
+    if not candidates:
+        return None
+
+    _, selected = min(candidates, key=lambda item: item[0])
+    selected["_matched"] = True
+    return selected
+
+
+def enrich_thermal_corrections(
+    report: dict[str, Any],
+    focus_sequencer_log_directory: Path | None,
+) -> None:
+    """Join SharpCap thermal launches with Focus Sequencer telemetry."""
+    session_start = datetime.fromisoformat(report["session"]["start"])
+    session_end = datetime.fromisoformat(report["session"]["end"])
+
+    if focus_sequencer_log_directory is None:
+        for correction in report["thermal_corrections"].values():
+            for execution in correction["executions"]:
+                execution["match_status"] = "focus_sequencer_path_not_configured"
+        return
+
+    tube_definitions = {
+        "main_telescope": "main",
+        "guide_telescope": "guide",
+    }
+
+    for key, tube in tube_definitions.items():
+        sequencer_executions = parse_focus_sequencer_logs(
+            focus_sequencer_log_directory,
+            session_start,
+            session_end,
+            tube,
+        )
+
+        correction = report["thermal_corrections"][key]
+        correction["focus_sequencer_log_directory"] = str(
+            focus_sequencer_log_directory
+        )
+        correction["focus_sequencer_execution_count"] = len(
+            sequencer_executions
+        )
+
+        for execution in correction["executions"]:
+            matched = match_focus_sequencer_execution(
+                execution,
+                sequencer_executions,
+            )
+
+            if matched is None:
+                execution["match_status"] = "no_matching_focus_sequencer_execution"
+                continue
+
+            execution["match_status"] = "matched"
+            execution["focus_sequencer"] = {
+                key: value
+                for key, value in matched.items()
+                if key != "_matched"
+            }
+
+            for error in matched["update_errors"]:
+                report["diagnostics"]["entries"].append(
+                    {
+                        "line_number": None,
+                        "timestamp": matched["started_at"],
+                        "level": "error",
+                        "thread_id": None,
+                        "category": "focus_sequencer_error",
+                        "impact": "error",
+                        "message": f"{tube}: {error}",
+                    }
+                )
 
 def create_report(log_file: Path, filename_start: datetime) -> dict[str, Any]:
     return {
@@ -398,8 +820,10 @@ def create_report(log_file: Path, filename_start: datetime) -> dict[str, Any]:
         "diagnostics": {"warning_count": 0, "error_count": 0, "fatal_count": 0, "entries": [], "by_category": {}, "impact_counts": {"expected": 0, "information": 0, "warning": 0, "error": 0, "critical": 0}, "relevant_events": []},
     }
 
-
-def build_report(log_file: Path) -> dict[str, Any]:
+def build_report(
+    log_file: Path,
+    focus_sequencer_log_directory: Path | None = None,
+) -> dict[str, Any]:
     filename_start = parse_filename_datetime(log_file)
     lines = read_log_lines(log_file)
     if not any(parse_record(line)[1] is not None for line in lines[:500]):
@@ -696,6 +1120,10 @@ def build_report(log_file: Path) -> dict[str, Any]:
 
     for correction in report["thermal_corrections"].values():
         correction["execution_count"] = len(correction["executions"])
+    enrich_thermal_corrections(
+        report,
+        focus_sequencer_log_directory,
+    )
     return report
 
 
@@ -709,13 +1137,71 @@ def build_focus_rows(report: dict[str, Any]) -> list[dict[str, str]]:
             parameters = f"Range {run['range_start']}..{run['range_end']}; {run['configured_steps']} steps; backlash {run['backlash_steps']}"
         else:
             parameters = run["description"]
-        rows.append({"timestamp": run["started_at"] or "", "source": "SharpCap autofocus", "status": run["status"] or "", "filter": run.get("filter") or "", "exposure_seconds": str(run.get("exposure_seconds") or ""), "parameters": parameters, "start_position": str(measurements[0]["position"] if measurements else ""), "best_position": str(result.get("best_focus_position") or scan.get("position") or ""), "final_position": str(measurements[-1]["position"] if measurements else ""), "temperature_celsius": str(result.get("focuser_temperature_celsius") or ""), "focus_score": str(scan.get("score") or ""), "variance_percent": str(scan.get("variance_percent") or ""), "duration": run["duration"] or ""})
+        rows.append({"timestamp": run["started_at"] or "", "source": "SharpCap autofocus", "status": run["status"] or "", "filter": run.get("filter") or "", "exposure_seconds": str(run.get("exposure_seconds") or ""), "parameters": parameters, "start_position": str(measurements[0]["position"] if measurements else ""), "best_position": str(result.get("best_focus_position") or scan.get("position") or ""), "final_position": str(measurements[-1]["position"] if measurements else ""), "temperature_celsius": str(result.get("focuser_temperature_celsius") or ""), "focus_score": str(scan.get("score") or ""), "variance_percent": str(scan.get("variance_percent") or ""), "duration": run["duration"] or "", "tube": "main", "match_status": "", "reference_temperature_celsius": "", "delta_temperature_celsius": "", "thermal_coefficient": "", "filter_offset_steps": "", "requested_correction_steps": "", "backlash_applied": "", "update_status": "", "end_reason": "", "focus_sequencer_log": "",})
     labels = {"main_telescope": "C8 thermal correction", "guide_telescope": "ED50 thermal correction"}
     for key, label in labels.items():
         correction = report["thermal_corrections"][key]
+        
         for execution in correction["executions"]:
             command = execution["command"] or correction["command"]
-            rows.append({"timestamp": execution["started_at"] or "", "source": label, "status": execution["status"] or "", "filter": "", "exposure_seconds": "", "parameters": f"{command} {execution['parameters'] or ''}".strip(), "start_position": "", "best_position": "", "final_position": "", "temperature_celsius": "", "focus_score": "", "variance_percent": "", "duration": execution["duration"] or ""})
+            telemetry = execution.get("focus_sequencer") or {}
+
+            rows.append({
+                "timestamp": execution["started_at"] or "",
+                "source": label,
+                "status": telemetry.get("end_reason") or execution["status"] or "",
+                "filter": telemetry.get("filter") or "",
+                "exposure_seconds": "",
+                "parameters": (
+                    f"{command} {execution['parameters'] or ''}".strip()
+                ),
+                "start_position": str(
+                    telemetry.get("position_before") or ""
+                ),
+                "best_position": str(
+                    telemetry.get("target_position") or ""
+                ),
+                "final_position": str(
+                    telemetry.get("position_after") or ""
+                ),
+                "temperature_celsius": str(
+                    telemetry.get("temperature_celsius") or ""
+                ),
+                "focus_score": "",
+                "variance_percent": "",
+                "duration": telemetry.get("duration") or execution["duration"] or "",
+                "tube": telemetry.get("tube") or (
+                    "guide" if key == "guide_telescope" else "main"
+                ),
+                "match_status": execution.get("match_status") or "",
+                "reference_temperature_celsius": str(
+                    telemetry.get("reference_temperature_celsius") or ""
+                ),
+                "delta_temperature_celsius": str(
+                    telemetry.get("delta_temperature_celsius") or ""
+                ),
+                "thermal_coefficient": str(
+                    telemetry.get("thermal_coefficient") or ""
+                ),
+                "filter_offset_steps": str(
+                    telemetry.get("filter_offset_steps") or ""
+                ),
+                "requested_correction_steps": str(
+                    telemetry.get("requested_correction_steps") or ""
+                ),
+                "backlash_applied": str(
+                    telemetry.get("backlash_applied")
+                    if telemetry.get("backlash_applied") is not None
+                    else ""
+                ),
+                "update_status": telemetry.get("update_status") or "",
+                "end_reason": telemetry.get("end_reason") or "",
+                "focus_sequencer_log": telemetry.get(
+                    "focus_sequencer_log",
+                    "",
+                ),
+            })
+
     return sorted(rows, key=lambda row: row["timestamp"])
 
 
@@ -727,15 +1213,39 @@ def write_reports(report: dict[str, Any]) -> tuple[Path, Path, Path]:
     text_path = REPORTS_DIRECTORY / f"sharpcap_focus_corrections_{suffix}.txt"
     json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     rows = build_focus_rows(report)
-    fields = ["timestamp", "source", "status", "filter", "exposure_seconds", "parameters", "start_position", "best_position", "final_position", "temperature_celsius", "focus_score", "variance_percent", "duration"]
+    fields = ["timestamp", "source", "tube", "status", "match_status", "filter", "exposure_seconds", "parameters", "start_position", "best_position", "final_position", "temperature_celsius", "reference_temperature_celsius", "delta_temperature_celsius", "thermal_coefficient", "filter_offset_steps", "requested_correction_steps", "backlash_applied", "update_status", "end_reason", "focus_score", "variance_percent", "duration", "focus_sequencer_log"]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-    header = "Timestamp | Source | Status | Filter | Exposure s | Parameters | Start | Best | Final | Temp C | Score | Variance % | Duration"
+    header = "Timestamp | Source | Tube | Status | Match | Filter | Start | Target | Final | Temp C | Ref Temp C | dT C | TCF | Correction | Backlash | Update | End reason | Duration"
     lines = ["SharpCap Focus Corrections", "=" * 26, "", header, "-" * len(header)]
     for row in rows:
-        lines.append(" | ".join(row[field] for field in fields))
+        lines.append(
+            " | ".join(
+                row.get(field, "")
+                for field in [
+                    "timestamp",
+                    "source",
+                    "tube",
+                    "status",
+                    "match_status",
+                    "filter",
+                    "start_position",
+                    "best_position",
+                    "final_position",
+                    "temperature_celsius",
+                    "reference_temperature_celsius",
+                    "delta_temperature_celsius",
+                    "thermal_coefficient",
+                    "requested_correction_steps",
+                    "backlash_applied",
+                    "update_status",
+                    "end_reason",
+                    "duration",
+        ]
+    )
+)
     if not rows:
         lines.append("No autofocus or thermal correction events found.")
     text_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -745,6 +1255,53 @@ def write_reports(report: dict[str, Any]) -> tuple[Path, Path, Path]:
 def format_values(values: list[Any], suffix: str = "") -> str:
     return ", ".join(f"{value}{suffix}" for value in values) if values else "Not detected"
 
+def print_thermal_correction_details(
+    report: dict[str, Any],
+) -> None:
+    """Print one concise line for every thermal focus correction."""
+    labels = {
+        "main_telescope": "Main tube thermal corrections",
+        "guide_telescope": "Guide tube thermal corrections",
+    }
+
+    for key, heading in labels.items():
+        executions = report["thermal_corrections"][key]["executions"]
+
+        print(heading + ":")
+
+        if not executions:
+            print("  None")
+            continue
+
+        for execution in executions:
+            telemetry = execution.get("focus_sequencer") or {}
+            timestamp = execution.get("started_at") or "unknown"
+            clock = timestamp.split("T")[-1] if "T" in timestamp else timestamp
+            status = telemetry.get("end_reason") or execution.get("status")
+            match_status = execution.get("match_status", "not_checked")
+
+            if not telemetry:
+                print(
+                    f"  [{clock}] {status}; match={match_status}; "
+                    f"script={execution.get('script')}"
+                )
+                continue
+
+            temperature = telemetry.get("temperature_celsius")
+            delta = telemetry.get("delta_temperature_celsius")
+            tcf = telemetry.get("thermal_coefficient")
+            correction = telemetry.get("requested_correction_steps")
+            before = telemetry.get("position_before")
+            after = telemetry.get("position_after")
+            backlash = telemetry.get("backlash_applied")
+            update = telemetry.get("update_status")
+
+            print(
+                f"  [{clock}] T={temperature} C; dT={delta} C; "
+                f"TCF={tcf}; correction={correction}; "
+                f"pos={before}->{after}; backlash={backlash}; "
+                f"update={update}; result={status}"
+            )
 
 def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path, text_path: Path) -> None:
     capture, sequence, guiding, focus = report["capture"], report["sequence"], report["guiding"], report["focus"]
@@ -777,6 +1334,7 @@ def print_summary(report: dict[str, Any], json_path: Path, csv_path: Path, text_
     print(f"Average autofocus time: {focus['autofocus_average_duration'] or '00:00:00'}")
     print(f"Main thermal corrections: {thermal['main_telescope']['execution_count']}")
     print(f"Guide thermal corrections: {thermal['guide_telescope']['execution_count']}")
+    print_thermal_correction_details(report)
     print(f"Meridian flip configured: {'yes' if meridian['configured'] else 'no'}")
     print(f"Meridian stop limit: {meridian['configured_stop_distance_degrees'] if meridian['configured_stop_distance_degrees'] is not None else 'Not detected'} degrees")
     print(f"Meridian flip executed: {'yes' if meridian['executed'] else 'no'}")
@@ -820,10 +1378,21 @@ def main() -> int:
     try:
         properties = read_properties(CONFIG_PATH)
         configured_path = properties.get("sharpcap.logs.path")
+        focus_sequencer_path = properties.get(
+            "sharpcap.focus_sequencer.logs.path"
+        )
+        focus_sequencer_directory = (
+            Path(focus_sequencer_path)
+            if focus_sequencer_path
+            else None
+        )
         if not configured_path:
             raise KeyError("Missing required property: sharpcap.logs.path")
         log_file = find_latest_log(Path(configured_path))
-        report = build_report(log_file)
+        report = build_report(
+            log_file,
+            focus_sequencer_directory,
+        )
         json_path, csv_path, text_path = write_reports(report)
         print_summary(report, json_path, csv_path, text_path)
         return 0
