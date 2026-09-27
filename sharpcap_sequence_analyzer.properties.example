@@ -1,3 +1,6 @@
-# Absolute path to the SharpCap log directory.
-# Use forward slashes on Windows to avoid escaping backslashes.
-sharpcap.logs.path=C:/Users/YOUR-USER/AppData/Local/SharpCap/logs
+# Absolute path to the SharpCap logs directory.
+sharpcap.logs.path=C:\Users\YOUR_USER\Documents\SharpCap\Logs
+
+# Absolute path to the SharpCap Focus Sequencer logs directory.
+# Example for this setup: C:\astro\sharpcap-focus-sequencer\logs
+sharpcap.focus_sequencer.logs.path=C:\astro\sharpcap-focus-sequencer\logs
