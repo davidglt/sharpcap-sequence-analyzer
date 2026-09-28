@@ -252,7 +252,8 @@ MERIDIAN_WAIT_PATTERN = re.compile(
 )
 SAVED_COORDINATES_PATTERN = re.compile(
     r"\bSaving\s+mount\s+co-ordinates\s+of\s+"
-    r"RA(?P<ra>\d{6}(?:[,.]\d+)?),?\s*Dec(?P<dec>[+-]?\d{6}(?:[,.]\d+)?)\b",
+    r"RA=?(?P<ra>\d{2}:?\d{2}:?\d{2}(?:[,.]\d+)?),?\s*"
+    r"Dec=?(?P<dec>[+-]?\d{2}:?\d{2}:?\d{2}(?:[,.]\d+)?)\b",
     re.IGNORECASE,
 )
 MERIDIAN_CAPTURE_CANCEL_PATTERN = re.compile(
@@ -379,12 +380,13 @@ def thermal_bucket_key(value: str) -> str:
 
 
 def format_compact_coordinate(value: str, coordinate_type: str) -> str:
-    """Convert compact sexagesimal RA or Dec into a colon/degree-marked form."""
+    """Convert a compact or colon-separated sexagesimal RA/Dec into a colon/degree-marked form."""
     normalized = value.replace(",", ".").strip()
     sign = ""
     if coordinate_type == "dec" and normalized[:1] in {"+", "-"}:
         sign, normalized = normalized[0], normalized[1:]
-    whole, dot, fraction = normalized.partition(".")
+    digits = normalized.replace(":", "")
+    whole, dot, fraction = digits.partition(".")
     if len(whole) != 6:
         return value
     if coordinate_type == "ra":
