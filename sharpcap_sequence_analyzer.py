@@ -112,6 +112,12 @@ AUTOFOCUS_STEP_END_PATTERN = re.compile(
     r"\bSequencer\s+(?::\s*)?Completed\s+(?::\s*)?Autofocus\b",
     re.IGNORECASE,
 )
+FOCUS_STEP_FAILURE_PATTERN = re.compile(
+    r"\bSequencer\s+(?::\s*)?Error\s+(?::\s*)?.*?\bwhile\s+running\s+step\s+"
+    r"(?P<description>Autofocus\b.*?|Refocus\b.*?|Set\s+exposure/?gain\s+for\s+plate\s+solving\s+and\s+focus\b.*?)"
+    r"(?:\s+in\s+|\s*$)",
+    re.IGNORECASE,
+)
 FOCUS_MEASUREMENT_PATTERN = re.compile(
     r"\bFocus\s+measurement\s+of\s+(?P<score>[\d.,]+)\s+at\s+"
     r"(?P<position>-?\d+).*?\bwhile\s+running\s+step\s+"
@@ -1020,6 +1026,15 @@ def build_report(
         if re.search(r"\bStarting\s+(?:Refocus|Set\s+exposure/?gain\s+for\s+plate\s+solving\s+and\s+focus)\b", message, re.IGNORECASE):
             state["focus_mode_depth"] += 1
         if re.search(r"\bCompleted\s+(?:Refocus|Set\s+exposure/?gain\s+for\s+plate\s+solving\s+and\s+focus)\b", message, re.IGNORECASE):
+            state["focus_mode_depth"] = max(0, state["focus_mode_depth"] - 1)
+        focus_step_failure = FOCUS_STEP_FAILURE_PATTERN.search(message)
+        if focus_step_failure:
+            # A failed step (e.g. "did not find a best focus position") never logs a
+            # matching "Completed" line, so without this the autofocus/refocus depth
+            # counters would stay stuck and every capture for the rest of the session
+            # would be misclassified as an auxiliary (non-science) exposure.
+            if focus_step_failure.group("description").lower().startswith("autofocus"):
+                state["autofocus_active"] = False
             state["focus_mode_depth"] = max(0, state["focus_mode_depth"] - 1)
 
         target_match = TARGET_PATTERN.search(message)
